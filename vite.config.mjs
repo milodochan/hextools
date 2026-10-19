@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
     const urlKey = env.VITE_BASE_URL
 
     return {
-        base: '/service/',
+        base: '/',
         server: {
             proxy: {
                 [urlKey]: {

@@ -85,7 +85,8 @@ const buildRoute = (data) => {
  * 默认路由数据
  */
 const routeDatas = [
-    { requiresAuth: true, name: '主页', url: '/', component: 'Dashboard', layout: true },
+    // { requiresAuth: true, name: '主页', url: '/', component: 'Dashboard', layout: true },
+    { requiresAuth: true, name: 'hex analysis tool', url: '/', component: 'pages/tools/hex', layout: true },
     { requiresAuth: true, name: '404', url: '/:pathMatch(.*)*', component: 'pages/auth/notFound', layout: true },
     { requiresAuth: true, name: '外链页面', url: '/iframe', component: 'pages/iframe', layout: true },
     { requiresAuth: true, name: '个人资料', url: '/userinfo', component: 'pages/auth/userInfo', layout: true },
@@ -112,7 +113,7 @@ export const useStore = defineStore('data', {
         }
     ],
     state: () => ({
-        token: '',
+        token: '3123123',
         userInfo: null,
         menus: [],
         permissions: [],
@@ -121,23 +122,26 @@ export const useStore = defineStore('data', {
         parentRoute: 'main'
     }),
     getters: {
-        isLoggedIn: (state) => true, // !!state.token && state.menus.length > 0,
-        userName: (state) => `${state.userInfo?.nickName}(${state.userInfo?.loginName})`,
+        isLoggedIn: (state) => !!state.token && state.menus.length > 0,
+        userName: (state) => 'test', // `${state.userInfo?.nickName}(${state.userInfo?.loginName})`,
         siderMenus: (state) => buildMenu(state.menus, '-1')
     },
     actions: {
         // 登录
         async login(data) {
-            try {
-                const res = await api.login(data)
-                if (res.code === 0)
-                    this.token = res.data
+            this.token = 'tesadasdsadasdsadas'
+            // try {
+            //     const res = await api.login(data)
+            //     if (res.code === 0)
+            //         this.token = res.data
 
-                return res
-            } catch (error) {
-                this.resetState()
-                throw error
-            }
+            //     return res
+            // } catch (error) {
+            //     this.resetState()
+            //     throw error
+            // }
+
+            return { code: 0, data }
         },
 
         // 登出
@@ -166,22 +170,23 @@ export const useStore = defineStore('data', {
             // }
 
             this.menus = [
-                    {
-                        id: 1,
-                        pid: '-1',
-                        name: '测试',
-                        icon: '',
-                        component: 'pages/Documentation',
-                        path: 'documentation'
-                    },
-                    // {
-                    //     id: 1,
-                    //     pid: '-1',
-                    //     label: '测试',
-                    //     icon: '',
-                    //     path: 'pages/Documentation'
-                    // },
-                ]
+                {
+                    id: '123123',
+                    name: 'test',
+                    path: 'system',
+                    component: '/system/config',
+                    url: '/system'
+                }
+            ]
+
+            return {
+                code: 0,
+                data: {
+                    menus: this.menus,
+                    pers: [],
+                    userInfo: {}
+                }
+            }
         },
 
         // 默认路由设置
@@ -204,28 +209,28 @@ export const useStore = defineStore('data', {
 
         // 生成动态路由
         async generateRoutes(router) {
-            // console.log(this.menus)
-            const routes = buildRoute(this.menus)
-            // console.log(routes)
-            routes.forEach(route => {
-                route.meta.layout
-                    ? router.addRoute(this.parentRoute, route)
-                    : router.addRoute(route)
-                // console.log('创建路由=>' + route.path)
-            })
+            // // console.log(this.menus)
+            // const routes = buildRoute(this.menus)
+            // // console.log(routes)
+            // routes.forEach(route => {
+            //     route.meta.layout
+            //         ? router.addRoute(this.parentRoute, route)
+            //         : router.addRoute(route)
+            //     // console.log('创建路由=>' + route.path)
+            // })
         },
 
         //  登录状态心跳 
         async startHeartbeat() {
             if (heartbeatInterval) return // 防止重复启动
-            heartbeatInterval = setInterval(async () => {
-                try {
-                    const res = await api.heartbeat()
-                    if (res.code !== 0) console.log(res.message)
-                } catch (err) {
-                    console.error('心跳失败', err)
-                }
-            }, 10000)  // 10秒一次
+            // heartbeatInterval = setInterval(async () => {
+            //     try {
+            //         const res = await api.heartbeat()
+            //         if (res.code !== 0) console.log(res.message)
+            //     } catch (err) {
+            //         console.error('心跳失败', err)
+            //     }
+            // }, 10000)  // 10秒一次
         },
 
         // 验证session中的信息是否存在

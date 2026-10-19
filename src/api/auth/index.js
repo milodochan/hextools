@@ -12,7 +12,10 @@ const login = (data) => service.post({ url: '/auth/login', data: data })
  * @param {*} loginName 
  * @returns 
  */
-const getSecretKey = (loginName) => service.get({ url: `/auth/secretkey?loginName=${loginName}` })
+const getSecretKey = (loginName) => {
+    // service.get({ url: `/auth/secretkey?loginName=${loginName}` })
+    return {code: 0, data: loginName}
+}
 
 /**
  * 获取验证码
