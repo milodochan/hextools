@@ -121,7 +121,7 @@ export const useStore = defineStore('data', {
         parentRoute: 'main'
     }),
     getters: {
-        isLoggedIn: (state) => !!state.token && state.menus.length > 0,
+        isLoggedIn: (state) => true, // !!state.token && state.menus.length > 0,
         userName: (state) => `${state.userInfo?.nickName}(${state.userInfo?.loginName})`,
         siderMenus: (state) => buildMenu(state.menus, '-1')
     },
@@ -147,23 +147,41 @@ export const useStore = defineStore('data', {
 
         // 获取菜单列表
         async getPermission() {
-            try {
-                const res = await api.getPermission()
-                if (res.code === 0) {
-                    this.menus = res.data.menus.sort((a, b) => a.sort - b.sort) // 考虑数据加密
-                    this.permissions = res.data.pers            // 考虑数据加密
-                    this.userInfo = res.data.userInfo           // 考虑数据加密
-                    if (res.data.super) storePer.disablePer()  // 超管不验证权限
-                    else {
-                        storePer.set(res.data.pers)             // 将权限数据传递给权限控制模块
-                        storePer.enablePer()                   // 启用权限控制   
-                    }
-                }
-                return res
-            } catch (error) {
-                this.menus = []
-                throw error
-            }
+            // try {
+            //     const res = await api.getPermission()
+            //     if (res.code === 0) {
+            //         this.menus = res.data.menus.sort((a, b) => a.sort - b.sort) // 考虑数据加密
+            //         this.permissions = res.data.pers            // 考虑数据加密
+            //         this.userInfo = res.data.userInfo           // 考虑数据加密
+            //         if (res.data.super) storePer.disablePer()  // 超管不验证权限
+            //         else {
+            //             storePer.set(res.data.pers)             // 将权限数据传递给权限控制模块
+            //             storePer.enablePer()                   // 启用权限控制   
+            //         }
+            //     }
+            //     return res
+            // } catch (error) {
+            //     this.menus = []
+            //     throw error
+            // }
+
+            this.menus = [
+                    {
+                        id: 1,
+                        pid: '-1',
+                        name: '测试',
+                        icon: '',
+                        component: 'pages/Documentation',
+                        path: 'documentation'
+                    },
+                    // {
+                    //     id: 1,
+                    //     pid: '-1',
+                    //     label: '测试',
+                    //     icon: '',
+                    //     path: 'pages/Documentation'
+                    // },
+                ]
         },
 
         // 默认路由设置

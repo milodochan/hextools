@@ -126,7 +126,7 @@ onBeforeUnmount(() => globalThis.removeEventListener('keyup', onKeyUp))
             <div class="w-full bg-gray-200 dark:bg-gray-800 py-20 px-8 sm:px-20"
                 style="border-radius: 20px; width: 120%;">
                 <div class="text-center mb-8">
-                    <div class="text-surface-900 dark:text-surface-0 text-3xl font-medium mb-4">企业基本信息审核系统</div>
+                    <div class="text-surface-900 dark:text-surface-0 text-3xl font-medium mb-4">HEX</div>
                     <span class="text-muted-color font-medium">欢迎使用</span>
                 </div>
                 <div class="flex flex-col gap-4">
