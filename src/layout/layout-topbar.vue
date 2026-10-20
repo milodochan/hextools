@@ -201,7 +201,7 @@ const openMessage = () => {
                 <!--logo-->
                 <image />
 
-                <span>企业基本信息审核系统</span>
+                <span>hex</span>
             </router-link>
         </div>
 

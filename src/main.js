@@ -22,7 +22,7 @@ import { LayoutKit, useLayout } from '@layoutkit/prime-vue-layoutkit'
 const { loadConfig } = useLayout()
 loadConfig()
 
-const app = createApp(App);
+const app = createApp(App)
 // 创建 pinia 实例
 const pinia = createPinia()
 pinia.use(piniaPluginPersistedstate)

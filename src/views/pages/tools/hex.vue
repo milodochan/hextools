@@ -1,23 +1,31 @@
 <script setup>
-import LayoutSplitter from '@/components/hex/LayoutSplitter.vue';
-import dataLoader from '@/components/hex/data-loader.vue';
+import dataLoader from '@/components/hex/data-loader.vue'
+import hexView from '@/components/hex/hex-view.vue'
+import result from '@/components/hex/result.vue'
+import schemaEditor from '@/components/hex/schema-editor.vue'
+import analysisResult from '@/components/hex/analysis-result.vue'
 </script>
 
 <template>
-    <!-- <div class="container mx-auto px-4"> -->
-    <!-- <LayoutSplitter /> -->
     <Splitter class="h-full">
-        <SplitterPanel class="flex items-center justify-center">
+        <SplitterPanel class="flex items-center justify-center" :size="40" :minSize="0">
+            <analysisResult />
+        </SplitterPanel>
+        <SplitterPanel class="flex items-center justify-center" :size="40" :minSize="0">
+            <schemaEditor />
+        </SplitterPanel>
+        <SplitterPanel class="flex items-center justify-center" :size="20" :minSize="0">
             <Splitter class="h-full" layout="vertical">
-                <SplitterPanel class="flex">
+                <SplitterPanel class="flex" :size="25" :minSize="0">
                     <dataLoader />
                 </SplitterPanel>
-                <SplitterPanel class="flex items-center justify-center"> Panel 2 </SplitterPanel>
-                <SplitterPanel class="flex items-center justify-center"> Panel 3 </SplitterPanel>
+                <SplitterPanel class="flex items-center justify-center" :size="50" :minSize="0">
+                    <hexView />
+                </SplitterPanel>
+                <SplitterPanel class="flex items-center justify-center" :size="25" :minSize="0">
+                    <result />
+                </SplitterPanel>
             </Splitter>
         </SplitterPanel>
-        <SplitterPanel class="flex items-center justify-center"> Panel 4 </SplitterPanel>
-        <SplitterPanel class="flex items-center justify-center"> Panel 5 </SplitterPanel>
     </Splitter>
-    <!-- </div> -->
 </template>
