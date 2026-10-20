@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useAnalyzer } from '@/stores/useAnalyzer'
 import { TYPE_OPTIONS } from '@/utils/hex/schema'
 import CodeEditor from './code-editor.vue'
@@ -8,14 +8,12 @@ const { state, setSchemaMode, runParse, onListInput, addListRow, moveListRow, de
 
 const codeRef = ref(null)
 const listWrapRef = ref(null)
-const tableRef = ref(null)
 const flashIdx = ref(-1)
-const editingRows = ref([])
 let flashTimer = null
 
 const modeOpts = [
-    { label: '代码', value: 'code' },
-    { label: '列表', value: 'list' }
+    { label: '列表', value: 'list' },
+    { label: '代码', value: 'code' }
 ]
 const typeOptions = TYPE_OPTIONS.map((t) => ({ label: t.toUpperCase(), value: t }))
 const endianOptions = [
@@ -23,45 +21,32 @@ const endianOptions = [
     { label: 'BE', value: 'be' }
 ]
 
-/* ===== 列宽/列序：交由 DataTable 原生 resizableColumns + reorderableColumns + stateStorage 处理 ===== */
-/* 注意：DataTable 持久化列序时，列的标识取自 columnKey || field。
-   两者都没有的列，其标识为 undefined → JSON 序列化后变成 null → 下次 restoreState()
-   时 findColumnByKey 匹配不到，该列会被兜底逻辑追加到表格末尾（序号列因此跑到最后）。
-   所以每一列都必须显式给出 columnKey。 */
+/* 列宽/列序：交由 DataTable 原生的 resizableColumns + reorderableColumns 处理。
+   不做 stateStorage 持久化——持久化的列序在表结构改动后容易残留旧 columnKey，
+   导致 restoreState 把列序打乱甚至丢失编辑器插槽，表现为「整表无法编辑」。 */
 
-const FIXED_FIRST = 'idx' // 序号列：始终钉在首位
-const FIXED_LAST = 'ops' // 操作列：始终钉在末位
+// 当前「被钉住字段」对应的列表行（hex 点击后 state.pinField 即该字段序号）。
+// genLineToRow: 代码行号 -> 列表行序号；lineMap: 字段序号 -> 代码行号。
+const activeRow = computed(() => {
+    const f = state.pinField
+    if (f == null || f < 0) return -1
+    const ln = state.lineMap ? state.lineMap[f] : undefined
+    if (ln == null || ln < 0) return -1
+    const ri = state.genLineToRow ? state.genLineToRow[ln] : undefined
+    return ri == null ? -1 : ri
+})
+// 用「行数据引用」匹配：PrimeVue v4 的 rowClass 不再回传 index（只传 rowData），
+// 原先 flashIdx === index 永远为假，导致高亮失效、只剩定位（滚动）。
+const activeRowItem = computed(() => (activeRow.value >= 0 ? state.listRows[activeRow.value] : null))
+const flashRowItem = computed(() => (flashIdx.value >= 0 ? state.listRows[flashIdx.value] : null))
 
-// 规范化列序：序号恒在首位、操作恒在末位，其余列保持相对顺序
-function normalizeOrder(order) {
-    if (!Array.isArray(order)) return null
-    const rest = []
-    const seen = new Set()
-    for (const k of order) {
-        if (k == null) continue
-        if (k === FIXED_FIRST || k === FIXED_LAST) continue
-        if (seen.has(k)) continue
-        seen.add(k)
-        rest.push(k)
-    }
-    return [FIXED_FIRST, ...rest, FIXED_LAST]
-}
-
-// 把「序号」钉回首位、「操作」钉回末位
-function applyFixedColumnOrder() {
-    const dt = tableRef.value
-    if (!dt) return
-    const cur = dt.d_columnOrder
-    const next = normalizeOrder(cur)
-    if (!next) return
-    if (Array.isArray(cur) && cur.length === next.length && cur.every((k, i) => k === next[i])) return
-    dt.d_columnOrder = next
-}
-
-function rowCls(data, index) {
+function rowCls(data) {
     const c = []
     if (data.raw != null) c.push('bg-gray-100 dark:bg-gray-800/60')
-    if (flashIdx.value === index) c.push('shadow-[inset_3px_0_0_#f43f5e]')
+    // 点击瞬间的脉冲反馈
+    if (flashRowItem.value && data === flashRowItem.value) c.push('shadow-[inset_3px_0_0_#f43f5e]')
+    // hex 点击后钉住的字段：整行持续高亮（与 hex 视图 pinField 的 rose ring 呼应）
+    if (activeRowItem.value && data === activeRowItem.value) c.push('ring-2 ring-inset ring-rose-500 bg-rose-50 dark:bg-rose-500/10')
     return c.join(' ')
 }
 
@@ -69,8 +54,15 @@ function onMode(v) {
     if (!v) return
     setSchemaMode(v)
 }
-function onCellEditComplete() {
-    // 编辑器里已通过 v-model 直接改了 listRows，这里仅触发重新生成代码 + 解析
+function onCellEditComplete(e) {
+    // PrimeVue v4 的 cell-edit 不会自动把编辑值写回数据源：
+    // 编辑时它在内部克隆了一份 rowData（editingMeta），编辑器 v-model 只改动了克隆体，
+    // completeEdit 把克隆体放在 e.newData 抛出、并保留 e.data 为原始行（同一响应式引用）。
+    // 必须在这里把克隆体合并回原始行，编辑结果才会真正持久。
+    if (e && e.data && e.newData) {
+        Object.assign(e.data, e.newData)
+    }
+    // 重新生成代码 + 解析
     onListInput()
 }
 function onCodeEdit() {
@@ -95,9 +87,12 @@ function flashListRow(idx) {
 }
 
 onMounted(() => {
-    // 兜底：若 localStorage 中残留的历史列序把「序号」排到了中间/末尾，
-    // restoreState() 会在 mounted 中还原它，这里统一纠正为「序号在最前、操作在最后」。
-    applyFixedColumnOrder()
+    // 清理可能残留的旧列序持久化（曾用 stateStorage="local"），避免旧 columnKey 干扰当前渲染导致无法编辑
+    try {
+        localStorage.removeItem('hexan.schemaCols.v4')
+    } catch (e) {
+        /* noop */
+    }
 
     registerEditor({
         scrollToLine(line) {
@@ -120,7 +115,7 @@ onBeforeUnmount(() => {
 
 <template>
     <div class="w-full h-full p-1 flex flex-col gap-1">
-        <Toolbar style="padding: 5px;">
+        <Toolbar style="padding: 5px">
             <template #start>
                 <span>Schema 编辑器</span>
             </template>
@@ -136,9 +131,7 @@ onBeforeUnmount(() => {
 
             <template #end>
                 <div class="flex justify-items-center content-center gap-1">
-                    <SelectButton :modelValue="state.schemaMode" :options="modeOpts" optionLabel="label"
-                        style="height: 28px; line-height: 28px;" optionValue="value" aria-labelledby="basic"
-                        size="small" @change="onMode($event.value)" />
+                    <SelectButton :modelValue="state.schemaMode" :options="modeOpts" optionLabel="label" style="height: 28px; line-height: 28px" optionValue="value" aria-labelledby="basic" size="small" @change="onMode($event.value)" />
                     <Button label="新增" icon="pi pi-plus" severity="primay" size="small" @click="addListRow" />
                     <Button label="解析" icon="pi pi-cog" severity="info" size="small" @click="runParse" />
                 </div>
@@ -146,32 +139,39 @@ onBeforeUnmount(() => {
         </Toolbar>
 
         <!-- 代码模式 -->
-        <div v-show="state.schemaMode === 'code'"
-            class="min-h-[160px] flex-1 overflow-hidden border-1 rounded-md border-gray-300 dark:border-gray-700">
+        <div v-show="state.schemaMode === 'code'" class="min-h-[160px] flex-1 overflow-hidden border-1 rounded-md border-gray-300 dark:border-gray-700">
             <CodeEditor ref="codeRef" v-model="state.code" @edit="onCodeEdit" />
         </div>
 
         <!-- 列表模式 -->
         <div v-show="state.schemaMode === 'list'" id="listMode" class="min-h-0 flex-1 overflow-hidden">
-            <div ref="listWrapRef" class="h-full overflow-auto">
-                <DataTable ref="tableRef" :value="state.listRows" editMode="cell" v-model:editingRows="editingRows"
-                    @cell-edit-complete="onCellEditComplete" resizableColumns columnResizeMode="fit" reorderableColumns
-                    @column-reorder="applyFixedColumnOrder" stateStorage="local" stateKey="hexan.schemaCols.v4" size="small"
-                    scrollable scrollHeight="flex" stripedRows :tableStyle="{ width: '840px' }" :rowClass="rowCls" class="list-dt">
+            <div ref="listWrapRef" class="h-full overflow-auto border-1 rounded-md border-gray-300 dark:border-gray-700">
+                <DataTable
+                    :value="state.listRows"
+                    editMode="cell"
+                    @cell-edit-complete="onCellEditComplete"
+                    resizableColumns
+                    columnResizeMode="fit"
+                    reorderableColumns
+                    size="small"
+                    scrollable
+                    scrollHeight="flex"
+                    stripedRows
+                    showGridlines
+                    :rowClass="rowCls"
+                    class="list-dt"
+                >
                     <Column header="#" columnKey="idx" :style="{ width: '42px' }" :reorderableColumn="false" :resizeable="false">
                         <template #body="{ index }">{{ index + 1 }}</template>
                     </Column>
                     <Column field="name" header="名称" columnKey="name" :style="{ width: '150px' }">
                         <template #body="{ data }">
-                            <span v-if="data.raw != null"
-                                class="font-mono text-[12px] text-gray-600 dark:text-gray-300">{{ data.raw }}</span>
+                            <span v-if="data.raw != null" class="font-mono text-[12px] text-gray-600 dark:text-gray-300">{{ data.raw }}</span>
                             <span v-else>{{ data.name }}</span>
                         </template>
                         <template #editor="{ data }">
-                            <InputText v-if="data.raw != null" v-model="data.raw" @input="onListInput" fluid
-                                size="small" autofocus placeholder="自定义代码片段" />
-                            <InputText v-else v-model="data.name" @input="onListInput" fluid size="small" autofocus
-                                placeholder="字段名" />
+                            <InputText v-if="data.raw != null" v-model="data.raw" fluid size="small" autofocus placeholder="自定义代码片段" />
+                            <InputText v-else v-model="data.name" fluid size="small" autofocus placeholder="字段名" />
                         </template>
                     </Column>
                     <Column field="type" header="类型" columnKey="type" :style="{ width: '110px' }">
@@ -180,8 +180,7 @@ onBeforeUnmount(() => {
                             <Tag v-else :value="data.type" severity="secondary" />
                         </template>
                         <template #editor="{ data }">
-                            <Select v-if="data.raw == null" v-model="data.type" :options="typeOptions"
-                                optionValue="value" optionLabel="label" size="small" fluid @change="onListInput" />
+                            <Select v-if="data.raw == null" v-model="data.type" :options="typeOptions" optionValue="value" optionLabel="label" size="small" fluid />
                             <span v-else class="text-gray-300 dark:text-gray-600">—</span>
                         </template>
                     </Column>
@@ -191,8 +190,7 @@ onBeforeUnmount(() => {
                             <span v-else class="font-mono text-[12px]">{{ data.length || '—' }}</span>
                         </template>
                         <template #editor="{ data }">
-                            <InputText v-if="data.raw == null" v-model="data.length" @input="onListInput" fluid
-                                size="small" autofocus placeholder="数字/表达式" />
+                            <InputText v-if="data.raw == null" v-model="data.length" fluid size="small" autofocus placeholder="数字/表达式" />
                             <span v-else class="text-gray-300 dark:text-gray-600">—</span>
                         </template>
                     </Column>
@@ -202,8 +200,7 @@ onBeforeUnmount(() => {
                             <Tag v-else :value="data.endian" severity="secondary" />
                         </template>
                         <template #editor="{ data }">
-                            <Select v-if="data.raw == null" v-model="data.endian" :options="endianOptions"
-                                optionValue="value" optionLabel="label" size="small" fluid @change="onListInput" />
+                            <Select v-if="data.raw == null" v-model="data.endian" :options="endianOptions" optionValue="value" optionLabel="label" size="small" fluid />
                             <span v-else class="text-gray-300 dark:text-gray-600">—</span>
                         </template>
                     </Column>
@@ -213,8 +210,7 @@ onBeforeUnmount(() => {
                             <span v-else class="font-mono text-[12px]">{{ data.offset || '—' }}</span>
                         </template>
                         <template #editor="{ data }">
-                            <InputText v-if="data.raw == null" v-model="data.offset" @input="onListInput" fluid
-                                size="small" autofocus placeholder="0" />
+                            <InputText v-if="data.raw == null" v-model="data.offset" fluid size="small" autofocus placeholder="0" />
                             <span v-else class="text-gray-300 dark:text-gray-600">—</span>
                         </template>
                     </Column>
@@ -224,16 +220,14 @@ onBeforeUnmount(() => {
                             <span v-else>{{ data.remark }}</span>
                         </template>
                         <template #editor="{ data }">
-                            <InputText v-if="data.raw == null" v-model="data.remark" @input="onListInput" fluid
-                                size="small" autofocus placeholder="备注" />
+                            <InputText v-if="data.raw == null" v-model="data.remark" fluid size="small" autofocus placeholder="备注" />
                             <span v-else class="text-gray-300 dark:text-gray-600">—</span>
                         </template>
                     </Column>
-                    <Column header="操作" columnKey="ops" :reorderableColumn="false" :resizeable="false"
-                        :style="{ width: '82px' }">
+                    <Column header="操作" columnKey="ops" :reorderableColumn="false" :resizeable="false" :style="{ width: '82px' }">
                         <template #body="{ data, index }">
                             <span v-if="data.raw != null" class="text-gray-300 dark:text-gray-600">—</span>
-                            <span v-else class="ops">
+                            <span v-else class="flex flex-row gap-1 ops">
                                 <button class="op-btn" title="上移" @click="moveListRow(index, -1)">▲</button>
                                 <button class="op-btn" title="下移" @click="moveListRow(index, 1)">▼</button>
                                 <button class="op-btn del" title="删除" @click="delListRow(index)">✕</button>
@@ -243,7 +237,7 @@ onBeforeUnmount(() => {
                 </DataTable>
             </div>
         </div>
-        <Message v-if="state.showErr" severity="error">{{ state.errMsg }}</Message>
+        <!-- <Message v-if="state.showErr" severity="error">{{ state.errMsg }}</Message> -->
     </div>
 </template>
 

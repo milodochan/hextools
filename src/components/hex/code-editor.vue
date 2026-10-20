@@ -1,6 +1,13 @@
 <script setup>
-import { ref, computed, watch, onMounted, nextTick } from 'vue';
+import { ref, computed, watch, nextTick, shallowRef } from 'vue';
 import { useAnalyzer } from '@/stores/useAnalyzer';
+import { Codemirror } from 'vue-codemirror';
+
+import { EditorView, lineNumbers, drawSelection, dropCursor, highlightSpecialChars, keymap, Decoration } from '@codemirror/view';
+import { StateField, StateEffect } from '@codemirror/state';
+import { history, defaultKeymap, historyKeymap, indentWithTab } from '@codemirror/commands';
+import { StreamLanguage, HighlightStyle, syntaxHighlighting, bracketMatching, indentOnInput, indentUnit } from '@codemirror/language';
+import { tags as t } from '@lezer/highlight';
 
 const props = defineProps({
     modelValue: { type: String, default: '' }
@@ -8,169 +15,274 @@ const props = defineProps({
 const emit = defineEmits(['update:modelValue', 'edit']);
 
 const { state } = useAnalyzer();
-const LINE_H = 19;
-
-const taRef = ref(null);
-const hlInnerRef = ref(null);
-const lnRef = ref(null);
-
-const lineCount = computed(() => Math.max(1, props.modelValue.split('\n').length));
 const activeLine = computed(() => (state.activeLine >= 0 ? state.activeLine : -1));
 
-function escapeHtml(s) {
-    return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
+/* ===== 轻量 BNS-schema 语法（与旧版高亮规则保持一致） =====
+   - 注释 // 与 /* *​/
+   - 字符串 ' " `
+   - 数字（含 0x 十六进制、前导小数点）
+   - 关键字
+   - Type.xxx 中的 Type 特殊着色
+   - .name / .type / .length / .endian / .offset 属性名特殊着色
+*/
+const KEYWORDS = new Set([
+    'const', 'let', 'var', 'function', 'return', 'if', 'else', 'for', 'while',
+    'new', 'typeof', 'true', 'false', 'null', 'undefined', 'async', 'await'
+]);
+const PROPS = new Set(['name', 'type', 'length', 'endian', 'offset']);
 
-/* 轻量语法高亮（注释 / 字符串 / 数字 / 关键字 / Type.xxx / 属性名） */
-function highlight(code) {
-    const kw = /\b(?:const|let|var|function|return|if|else|for|while|new|typeof|true|false|null|undefined|async|await)\b/;
-    const out = [];
-    let i = 0;
-    const n = code.length;
-    let com = null; // '//' | '/*'
-    while (i < n) {
-        const c = code[i];
-        const c2 = i + 1 < n ? code[i + 1] : '';
-        if (com === '//') {
-            let j = i;
-            while (j < n && code[j] !== '\n') j++;
-            out.push('<span class="text-gray-400 italic">' + escapeHtml(code.slice(i, j)) + '</span>');
-            i = j;
-            com = null;
-            continue;
+const bnsStreamParser = {
+    name: 'bns-schema',
+    startState() {
+        return { block: false };
+    },
+    token(stream, st) {
+        if (st.block) {
+            if (stream.match(/.*?\*\//)) st.block = false;
+            else stream.skipToEnd();
+            return 'comment';
         }
-        if (com === '/*') {
-            let j = i;
-            while (j < n && !(code[j] === '*' && code[j + 1] === '/')) j++;
-            const end = Math.min(n, j + 2);
-            out.push('<span class="text-gray-400 italic">' + escapeHtml(code.slice(i, end)) + '</span>');
-            i = end;
-            com = null;
-            continue;
+        if (stream.eatSpace()) return null;
+
+        // 注释
+        if (stream.match('//')) {
+            stream.skipToEnd();
+            return 'comment';
         }
-        if (c === '/' && c2 === '/') {
-            com = '//';
-            i += 2;
-            continue;
+        if (stream.match('/*')) {
+            st.block = true;
+            return 'comment';
         }
-        if (c === '/' && c2 === '*') {
-            com = '/*';
-            i += 2;
-            continue;
-        }
-        if (c === "'" || c === '"' || c === '`') {
-            const q = c;
-            let j = i + 1;
-            while (j < n) {
-                if (code[j] === '\\') {
-                    j += 2;
+
+        const ch = stream.peek();
+
+        // 字符串（含模板串）
+        if (ch === '"' || ch === "'" || ch === '`') {
+            stream.next();
+            while (!stream.eol()) {
+                const c = stream.next();
+                if (c === '\\') {
+                    stream.next();
                     continue;
                 }
-                if (code[j] === q) {
-                    j++;
-                    break;
-                }
-                j++;
+                if (c === ch) break;
             }
-            out.push('<span class="text-emerald-600 dark:text-emerald-400">' + escapeHtml(code.slice(i, j)) + '</span>');
-            i = j;
-            continue;
+            return 'string';
         }
-        if (/[0-9]/.test(c) || (c === '.' && /[0-9]/.test(c2))) {
-            let j = i;
-            if (c === '0' && (c2 === 'x' || c2 === 'X')) {
-                j += 2;
-                while (j < n && /[0-9a-fA-F]/.test(code[j])) j++;
+
+        // 数字
+        if (/[0-9]/.test(ch) || (ch === '.' && /[0-9]/.test(stream.peek()))) {
+            if (ch === '0' && (stream.peek() === 'x' || stream.peek() === 'X')) {
+                stream.next();
+                stream.next();
+                stream.match(/[0-9a-fA-F]+/);
             } else {
-                while (j < n && /[0-9a-fA-FxX.]/.test(code[j])) j++;
+                stream.match(/[0-9a-fA-FxX.]+/);
             }
-            out.push('<span class="text-amber-600 dark:text-amber-400">' + escapeHtml(code.slice(i, j)) + '</span>');
-            i = j;
-            continue;
+            return 'number';
         }
-        if (/[A-Za-z_$]/.test(c)) {
-            let j = i;
-            while (j < n && /[\w$]/.test(code[j])) j++;
-            const word = code.slice(i, j);
-            if (kw.test(word)) out.push('<span class="text-violet-600 dark:text-violet-400">' + escapeHtml(word) + '</span>');
-            else if (word === 'Type') out.push('<span class="text-sky-600 dark:text-sky-400">' + escapeHtml(word) + '</span>');
-            else out.push(escapeHtml(word));
-            i = j;
-            continue;
+
+        // 标识符 / 关键字 / Type
+        if (/[A-Za-z_$]/.test(ch)) {
+            stream.next();
+            stream.match(/[\w$]*/);
+            const w = stream.current();
+            if (KEYWORDS.has(w)) return 'keyword';
+            if (w === 'Type') return 'typeName';
+            return 'variableName';
         }
-        if (c === '.') {
-            let j = i + 1;
-            while (j < n && /[\w$]/.test(code[j])) j++;
-            const prop = code.slice(i + 1, j);
-            if (['name', 'type', 'length', 'endian', 'offset'].includes(prop)) out.push('.' + '<span class="text-blue-600 dark:text-blue-400">' + escapeHtml(prop) + '</span>');
-            else out.push('.' + escapeHtml(prop));
-            i = j;
-            continue;
+
+        // .属性名
+        if (ch === '.') {
+            stream.next();
+            if (stream.match(/[\w$]+/)) {
+                const p = stream.current();
+                if (PROPS.has(p)) return 'propertyName';
+            }
+            return null;
         }
-        out.push(escapeHtml(c));
-        i++;
+
+        stream.next();
+        return null;
+    },
+    languageData: {
+        commentTokens: { line: '//', block: { open: '/*', close: '*/' } }
     }
-    return out.join('');
+};
+
+const bnsLanguage = StreamLanguage.define(bnsStreamParser);
+
+// 颜色使用 CSS 变量，由 style 块按 .app-dark 切换亮/暗
+const bnsHighlight = HighlightStyle.define([
+    { tag: t.comment, color: 'var(--cm-comment)', fontStyle: 'italic' },
+    { tag: t.string, color: 'var(--cm-string)' },
+    { tag: t.number, color: 'var(--cm-number)' },
+    { tag: t.keyword, color: 'var(--cm-keyword)' },
+    { tag: t.typeName, color: 'var(--cm-typename)' },
+    { tag: t.propertyName, color: 'var(--cm-property)' },
+    { tag: t.variableName, color: 'var(--cm-fg)' }
+]);
+
+// 基础编辑扩展（不含光标所在行高亮，避免与下方「外部 activeLine」高亮冲突）
+const baseSetup = [
+    lineNumbers(),
+    highlightSpecialChars(),
+    history(),
+    drawSelection(),
+    dropCursor(),
+    indentOnInput(),
+    bracketMatching(),
+    indentUnit.of('  '),
+    keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab])
+];
+
+const baseTheme = EditorView.theme({
+    '&': {
+        height: '100%',
+        backgroundColor: 'var(--cm-bg)',
+        color: 'var(--cm-fg)',
+        fontSize: '12.5px'
+    },
+    '.cm-scroller': {
+        fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace',
+        lineHeight: '19px'
+    },
+    '.cm-gutters': {
+        backgroundColor: 'var(--cm-gutter-bg)',
+        color: 'var(--cm-gutter-color)',
+        border: 'none',
+        borderRight: '1px solid var(--cm-border)'
+    },
+    // 关闭自带的「光标行」高亮，避免与下方 activeLine 高亮视觉重叠
+    '.cm-activeLineGutter': { backgroundColor: 'transparent' },
+    '.cm-activeLine': { backgroundColor: 'transparent' },
+    '.cm-cursor': { borderLeftColor: 'var(--cm-caret)' },
+    '.cm-selectionBackground, .cm-content ::selection': { backgroundColor: 'var(--cm-selection)' },
+    // 外部 activeLine（解析定位行）高亮
+    '.cm-schema-active-line': {
+        backgroundColor: 'var(--cm-activeline-bg)',
+        boxShadow: 'inset 2px 0 0 var(--cm-activeline-border)'
+    },
+    '&.cm-focused': { outline: 'none' }
+});
+
+/* ===== 外部 activeLine（state.activeLine，0-based）高亮 ===== */
+const setActiveLine = StateEffect.define();
+const activeLineField = StateField.define({
+    create() {
+        return -1;
+    },
+    update(value, tr) {
+        for (const e of tr.effects) if (e.is(setActiveLine)) value = e.value;
+        return value;
+    },
+    provide: (f) =>
+        // 注意：decorations.from 的 getter 只接收字段值，不接收 state，
+        // 因此改用 compute(以本字段为依赖)，在回调里通过 state.field(f) 取值并访问 doc。
+        EditorView.decorations.compute([f], (state) => {
+            const active = state.field(f);
+            if (active < 0 || active >= state.doc.lines) return Decoration.none;
+            const line = state.doc.line(Math.min(active + 1, state.doc.lines));
+            return Decoration.set([Decoration.line({ class: 'cm-schema-active-line' }).range(line.from)]);
+        })
+});
+
+const extensions = [baseSetup, bnsLanguage, syntaxHighlighting(bnsHighlight), baseTheme, activeLineField];
+
+/* ===== 视图引用与对外方法 ===== */
+const cmView = shallowRef(null);
+
+function onReady(payload) {
+    cmView.value = payload && payload.view ? payload.view : null;
 }
 
-const hlHtml = computed(() => highlight(props.modelValue));
-
-function onInput(e) {
-    emit('update:modelValue', e.target.value);
+// 文本变化（仅来自真实输入，vue-codemirror 已过滤外部赋值）
+function onChange() {
     emit('edit');
 }
+function onUpdate(val) {
+    emit('update:modelValue', val);
+}
 
-function onScroll() {
-    const ta = taRef.value;
-    if (!ta) return;
-    if (hlInnerRef.value) hlInnerRef.value.style.transform = 'translate(' + -ta.scrollLeft + 'px,' + -ta.scrollTop + 'px)';
-    if (lnRef.value) lnRef.value.scrollTop = ta.scrollTop;
+function setActive(line) {
+    const view = cmView.value;
+    if (!view) return;
+    view.dispatch({ effects: setActiveLine.of(line) });
 }
 
 function scrollToLine(line) {
-    const ta = taRef.value;
-    if (!ta) return;
-    ta.scrollTop = Math.max(0, line * LINE_H - ta.clientHeight / 2);
-    onScroll();
+    const view = cmView.value;
+    if (!view) return;
+    const target = Math.max(0, line | 0);
+    setActive(target);
+    if (target >= 0 && target < view.state.doc.lines) {
+        const pos = view.state.doc.line(target + 1).from;
+        view.dispatch({ effects: EditorView.scrollIntoView(pos, { y: 'center' }) });
+    }
 }
 
+function clearActiveLine() {
+    setActive(-1);
+}
+
+// state.activeLine 变化：定位并高亮；为 -1 时清除高亮（与原组件行为一致）
 watch(activeLine, (l) => {
     if (l >= 0) nextTick(() => scrollToLine(l));
+    else clearActiveLine();
 });
 
 defineExpose({ scrollToLine });
-
-onMounted(() => {
-    onScroll();
-});
 </script>
 
 <template>
-    <div class="flex h-full w-full overflow-hidden font-mono text-[12.5px] leading-[19px]">
-        <!-- 行号栏：与代码区纵向滚动同步 -->
-        <div ref="lnRef" class="w-[54px] shrink-0 overflow-hidden border-r border-gray-200 bg-gray-50 text-right text-[12px] leading-[19px] text-gray-400 select-none dark:border-gray-700 dark:bg-gray-900 dark:text-gray-600">
-            <div v-for="n in lineCount" :key="n" class="h-[19px] pr-2" :class="n - 1 === activeLine ? 'bg-amber-400/15 text-amber-600 dark:text-amber-400' : ''">
-                {{ n }}
-            </div>
-        </div>
-
-        <!-- 代码区：高亮层在底层，透明 textarea 覆盖在上层接收输入 -->
-        <div class="relative min-w-0 flex-1 overflow-hidden bg-white dark:bg-gray-950">
-            <div class="pointer-events-none absolute inset-0 overflow-hidden" aria-hidden="true">
-                <div ref="hlInnerRef" class="absolute top-0 left-0 w-max min-w-full">
-                    <div class="whitespace-pre px-2" v-html="hlHtml"></div>
-                    <div v-if="activeLine >= 0" class="absolute top-0 left-0 h-[19px] w-full border-l-2 border-amber-500/70 bg-amber-400/10" :style="{ top: activeLine * LINE_H + 'px' }"></div>
-                </div>
-            </div>
-            <textarea
-                ref="taRef"
-                :value="modelValue"
-                wrap="off"
-                spellcheck="false"
-                class="absolute inset-0 h-full w-full resize-none bg-transparent font-mono text-[12.5px] leading-[19px] text-transparent caret-blue-600 outline-none selection:bg-blue-500/30 dark:caret-blue-400"
-                @input="onInput"
-                @scroll="onScroll"
-            ></textarea>
-        </div>
-    </div>
+    <Codemirror
+        :model-value="props.modelValue"
+        :extensions="extensions"
+        @update:model-value="onUpdate"
+        @change="onChange"
+        @ready="onReady"
+    />
 </template>
+
+<!-- 非 scoped：需作用于 CodeMirror 动态生成的 DOM -->
+<style>
+.cm-editor {
+    --cm-comment: #9ca3af;
+    --cm-string: #059669;
+    --cm-number: #d97706;
+    --cm-keyword: #7c3aed;
+    --cm-typename: #0284c7;
+    --cm-property: #2563eb;
+    --cm-fg: #1f2937;
+    --cm-bg: #ffffff;
+    --cm-gutter-bg: #f9fafb;
+    --cm-gutter-color: #9ca3af;
+    --cm-border: #e5e7eb;
+    --cm-caret: #2563eb;
+    --cm-selection: rgba(59, 130, 246, 0.3);
+    --cm-activeline-bg: rgba(245, 158, 11, 0.1);
+    --cm-activeline-border: rgba(245, 158, 11, 0.7);
+    height: 100%;
+}
+
+/* PrimeVue 暗色（.app-dark）以及常见 .dark 约定 */
+.app-dark .cm-editor,
+.dark .cm-editor {
+    --cm-comment: #6b7280;
+    --cm-string: #34d399;
+    --cm-number: #fbbf24;
+    --cm-keyword: #a78bfa;
+    --cm-typename: #38bdf8;
+    --cm-property: #60a5fa;
+    --cm-fg: #e5e7eb;
+    --cm-bg: #030712;
+    --cm-gutter-bg: #111827;
+    --cm-gutter-color: #4b5563;
+    --cm-border: #1f2937;
+    --cm-caret: #60a5fa;
+    --cm-selection: rgba(59, 130, 246, 0.35);
+    --cm-activeline-bg: rgba(245, 158, 11, 0.1);
+    --cm-activeline-border: rgba(245, 158, 11, 0.7);
+}
+
+</style>

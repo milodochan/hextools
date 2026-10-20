@@ -44,7 +44,7 @@ const state = reactive({
     activeLine: -1,
     viewVersion: 0,
 
-    schemaMode: 'code', // 'code' | 'list'
+    schemaMode: 'list', // 'code' | 'list'
     listRows: [],
     genLineToRow: {},
 
@@ -70,6 +70,8 @@ const state = reactive({
     encSel: 'ascii',
 
     samples: SAMPLES,
+    dataHistory: [],
+    activeHistoryId: null,
 
     listPreamble: '',
 
@@ -85,6 +87,12 @@ let toastShow = null
 let saveTimer = null
 let listTimer = null
 const LS_KEY = 'hexan.v2'
+const HIST_KEY = 'hexan.history.v1'
+const MAX_HISTORY = 30
+const HIST_MAX_BYTES = 4 * 1024 * 1024 // 历史 hex 文本总体积上限（约 4MB），避免撑爆 localStorage
+
+// 启动自检：init() 负责从 localStorage 还原历史与上次数据；用此守卫保证只跑一次
+let _inited = false
 
 export function getCov() {
     return cov
@@ -171,7 +179,7 @@ function showErr(msg) {
 }
 
 /* ===================== 数据加载 ===================== */
-function loadData() {
+function loadData(meta) {
     hideErr()
     let r
     try {
@@ -195,6 +203,7 @@ function loadData() {
     updateOutHex()
     saveState()
     if (state.code.indexOf('schema') >= 0) runParse()
+    if (!meta || !meta.silent) recordCurrent(meta || {})
 }
 
 function readFile(f) {
@@ -203,13 +212,15 @@ function readFile(f) {
         const buf = new Uint8Array(r.result)
         if (/\.(hex|txt)$/i.test(f.name)) state.hexInput = new TextDecoder().decode(buf)
         else state.hexInput = bytesToHex(buf)
-        loadData()
+        // 选文件只做加载解析预览，不自动建历史；历史仅由「保存」按钮显式创建
+        loadData({ silent: true })
     }
     r.readAsArrayBuffer(f)
 }
 
 function clearData() {
     state.hexInput = ''
+    state.activeHistoryId = null
     setBytes(null)
     state.currentFields = []
     state.lineMap = []
@@ -234,7 +245,115 @@ function applySample(idx) {
     state.startOffset = 0
     state.isNameLen = false
     state.activeLine = -1
-    loadData()
+    loadData({ silent: true })
+}
+
+/* ===================== 数据历史（下拉可删除） ===================== */
+function persistHistory() {
+    try {
+        const payload = state.dataHistory.map((e) => ({
+            id: e.id,
+            name: e.name,
+            hex: e.hex,
+            size: e.size,
+            createdAt: e.createdAt,
+            source: e.source,
+        }))
+        localStorage.setItem(HIST_KEY, JSON.stringify(payload))
+    } catch (e) {
+        /* noop：超出配额等 */
+    }
+}
+function loadHistory() {
+    try {
+        const raw = localStorage.getItem(HIST_KEY)
+        if (!raw) return
+        const arr = JSON.parse(raw)
+        if (Array.isArray(arr)) state.dataHistory = arr
+    } catch (e) {
+        /* noop */
+    }
+}
+
+// 时间命名：YYYY-MM-DD HH:mm:ss
+function tsName(t) {
+    const d = new Date(t)
+    const p = (x) => String(x).padStart(2, '0')
+    return (
+        d.getFullYear() +
+        '-' +
+        p(d.getMonth() + 1) +
+        '-' +
+        p(d.getDate()) +
+        ' ' +
+        p(d.getHours()) +
+        ':' +
+        p(d.getMinutes()) +
+        ':' +
+        p(d.getSeconds())
+    )
+}
+
+// 当前已加载数据生成一条历史记录；相同 hex 去重（移顶并刷新时间）
+function recordCurrent(meta) {
+    const bytes = state.bytes
+    if (!bytes || !bytes.length) return
+    const hex = bytesToHex(bytes)
+    const now = Date.now()
+    const dupIdx = state.dataHistory.findIndex((e) => e.hex === hex)
+    if (dupIdx >= 0) state.dataHistory.splice(dupIdx, 1)
+    const source = (meta && meta.source) || 'manual'
+    // 自定义名称优先（保存按钮弹窗输入）；为空则回退到时间命名
+    const name = meta && meta.name && meta.name.trim() ? meta.name.trim() : tsName(now)
+    const entry = {
+        id: 'd' + now.toString(36) + Math.random().toString(36).slice(2, 6),
+        name,
+        hex,
+        size: bytes.length,
+        createdAt: now,
+        source,
+    }
+    state.dataHistory.unshift(entry)
+    if (state.dataHistory.length > MAX_HISTORY) state.dataHistory.length = MAX_HISTORY
+    // 总体积上限：从最旧（尾部）累加，超阈值则丢弃最前面的若干旧条目
+    let total = 0
+    for (let i = state.dataHistory.length - 1; i >= 0; i--) {
+        total += state.dataHistory[i].hex.length
+        if (total > HIST_MAX_BYTES) {
+            state.dataHistory.splice(0, i)
+            break
+        }
+    }
+    state.activeHistoryId = entry.id
+    persistHistory()
+}
+
+// 显式「保存」：把当前已加载的数据（state.bytes）作为一条历史记录写入下拉，并弹窗指定名称。
+function saveCurrent(name) {
+    // 确保 hexInput 已解析为 bytes（例如只粘贴了文本还没触发解析）
+    loadData({ silent: true })
+    if (!state.bytes || !state.bytes.length) {
+        showErr('没有可保存的数据，请先粘贴或加载文件')
+        return false
+    }
+    recordCurrent({ source: 'manual', name: name || '' })
+    return true
+}
+
+function loadFromHistory(id) {
+    const e = state.dataHistory.find((x) => x.id === id)
+    if (!e) return
+    state.hexInput = e.hex
+    state.activeHistoryId = id
+    loadData({ silent: true })
+}
+
+function deleteHistory(id) {
+    const idx = state.dataHistory.findIndex((x) => x.id === id)
+    if (idx < 0) return
+    state.dataHistory.splice(idx, 1)
+    if (state.activeHistoryId === id) state.activeHistoryId = null
+    persistHistory()
 }
 
 /* ===================== 解析 ===================== */
@@ -794,6 +913,7 @@ function loadState() {
 
 /* ===================== 初始化 ===================== */
 function init() {
+    loadHistory()
     const saved = loadState()
     if (saved) {
         state.hexInput = saved.data || ''
@@ -809,7 +929,7 @@ function init() {
             if (rows) state.listRows = rows
             else state.schemaMode = 'code'
         }
-        if (state.hexInput.trim()) loadData()
+        if (state.hexInput.trim()) loadData({ silent: true })
         else applySample(0)
     } else {
         applySample(0)
@@ -834,6 +954,10 @@ const resultRows = computed(() =>
 
 /* ===================== 导出 ===================== */
 export function useAnalyzer() {
+    if (!_inited) {
+        _inited = true
+        init()
+    }
     return {
         state,
         RENDER_CAP,
@@ -849,6 +973,9 @@ export function useAnalyzer() {
         readFile,
         clearData,
         applySample,
+        loadFromHistory,
+        deleteHistory,
+        saveCurrent,
         // 解析
         runParse,
         // 高亮联动
