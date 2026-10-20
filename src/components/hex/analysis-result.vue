@@ -46,8 +46,8 @@ function valCls(row) {
         <div v-show="state.resViewMode === 'table'" class="min-h-0 flex-1 overflow-hidden">
             <DataTable :value="resultRows" dataKey="i" scrollable scrollHeight="flex" size="small" :rowClass="rowClass"
                 @row-click="onRow" stripedRows reorderableColumns class="res-dt h-full">
-                <Column header="#" field="idx" style="width: 42px" />
-                <Column header="行" style="width: 46px">
+                <Column header="#" field="idx" columnKey="idx" style="width: 42px" />
+                <Column header="行" columnKey="line" style="width: 46px">
                     <template #body="{ data }">
                         <span v-if="data.hasLine"
                             class="cursor-pointer font-mono text-[12px] text-blue-600 hover:underline dark:text-blue-400"
@@ -55,21 +55,21 @@ function valCls(row) {
                         <span v-else class="font-mono text-[12px] text-gray-300 dark:text-gray-600">—</span>
                     </template>
                 </Column>
-                <Column header="字段" field="name" style="min-width: 130px">
+                <Column header="字段" field="name" columnKey="name" style="min-width: 130px">
                     <template #body="{ data }">
                         <span class="mr-1 inline-block h-2 w-2 rounded-full align-middle"
                             :class="FIELD_SOLID[data.colorIdx]"></span>{{ data.name }}
                     </template>
                 </Column>
-                <Column header="类型" field="type" style="width: 84px" />
-                <Column header="偏移" field="off" style="width: 74px" />
-                <Column header="长度" field="len" style="width: 56px" />
-                <Column header="值" field="val" style="min-width: 180px">
+                <Column header="类型" field="type" columnKey="type" style="width: 84px" />
+                <Column header="偏移" field="off" columnKey="off" style="width: 74px" />
+                <Column header="长度" field="len" columnKey="len" style="width: 56px" />
+                <Column header="值" field="val" columnKey="val" style="min-width: 180px">
                     <template #body="{ data }">
                         <span class="font-mono text-[12px] break-all">{{ data.val }}</span>
                     </template>
                 </Column>
-                <Column header="操作" style="width: 56px">
+                <Column header="操作" columnKey="ops" style="width: 56px">
                     <template #body="{ data }">
                         <Button icon="pi pi-pencil" size="small" text rounded aria-label="编辑字段"
                             @click.stop="openReplace(data.i)" />

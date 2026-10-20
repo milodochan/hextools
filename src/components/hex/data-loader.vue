@@ -48,8 +48,19 @@ function onDrop(e) {
             </template>
 
             <template #center>
-                <Select :options="sampleOptions" optionLabel="label" optionValue="idx" placeholder="载入示例…"
-                    class="min-w-[150px] text-xs" size="small" @change="onSample" />
+                <div class="flex flex-wrap items-center justify-center gap-3">
+                    <label class="inline-flex items-center gap-1 text-[11.5px] text-gray-600 dark:text-gray-300">
+                        起始偏移
+                        <InputText class="w-[78px] font-mono text-[12px]" v-model="state.startOffset" @change="onOffsetChange"
+                            placeholder="0" size="small" />
+                    </label>
+                    <label class="inline-flex items-center gap-1 text-[11.5px] text-gray-600 dark:text-gray-300">
+                        <Checkbox v-model="state.isNameLen" :binary="true" @change="onNameLenChange" size="small" />
+                        命名长度
+                    </label>
+                    <Select :options="sampleOptions" optionLabel="label" optionValue="idx" placeholder="载入示例…"
+                        class="min-w-[150px] text-xs" size="small" @change="onSample" />
+                </div>
             </template>
 
             <template #end>

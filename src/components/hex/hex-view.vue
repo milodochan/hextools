@@ -246,8 +246,10 @@ onBeforeUnmount(() => {
         </div>
 
         <Message v-if="state.showErr" severity="error">{{ state.errMsg }}</Message>
-        <Message v-else severity="secondary" class="text-[12px]">
-            <span v-html="infoHtml"></span>
+        <!-- 注意：Message 组件 inheritAttrs=false，根元素只绑 ptm('root')，
+             外部 class 不会落到根元素，因此字号类放在内部 span 上 -->
+        <Message v-else severity="secondary">
+            <span class="text-[12px]" v-html="infoHtml"></span>
         </Message>
     </div>
 </template>

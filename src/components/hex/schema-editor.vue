@@ -8,6 +8,7 @@ const { state, setSchemaMode, runParse, onListInput, addListRow, moveListRow, de
 
 const codeRef = ref(null)
 const listWrapRef = ref(null)
+const tableRef = ref(null)
 const flashIdx = ref(-1)
 const editingRows = ref([])
 let flashTimer = null
@@ -23,6 +24,39 @@ const endianOptions = [
 ]
 
 /* ===== 列宽/列序：交由 DataTable 原生 resizableColumns + reorderableColumns + stateStorage 处理 ===== */
+/* 注意：DataTable 持久化列序时，列的标识取自 columnKey || field。
+   两者都没有的列，其标识为 undefined → JSON 序列化后变成 null → 下次 restoreState()
+   时 findColumnByKey 匹配不到，该列会被兜底逻辑追加到表格末尾（序号列因此跑到最后）。
+   所以每一列都必须显式给出 columnKey。 */
+
+const FIXED_FIRST = 'idx' // 序号列：始终钉在首位
+const FIXED_LAST = 'ops' // 操作列：始终钉在末位
+
+// 规范化列序：序号恒在首位、操作恒在末位，其余列保持相对顺序
+function normalizeOrder(order) {
+    if (!Array.isArray(order)) return null
+    const rest = []
+    const seen = new Set()
+    for (const k of order) {
+        if (k == null) continue
+        if (k === FIXED_FIRST || k === FIXED_LAST) continue
+        if (seen.has(k)) continue
+        seen.add(k)
+        rest.push(k)
+    }
+    return [FIXED_FIRST, ...rest, FIXED_LAST]
+}
+
+// 把「序号」钉回首位、「操作」钉回末位
+function applyFixedColumnOrder() {
+    const dt = tableRef.value
+    if (!dt) return
+    const cur = dt.d_columnOrder
+    const next = normalizeOrder(cur)
+    if (!next) return
+    if (Array.isArray(cur) && cur.length === next.length && cur.every((k, i) => k === next[i])) return
+    dt.d_columnOrder = next
+}
 
 function rowCls(data, index) {
     const c = []
@@ -61,6 +95,10 @@ function flashListRow(idx) {
 }
 
 onMounted(() => {
+    // 兜底：若 localStorage 中残留的历史列序把「序号」排到了中间/末尾，
+    // restoreState() 会在 mounted 中还原它，这里统一纠正为「序号在最前、操作在最后」。
+    applyFixedColumnOrder()
+
     registerEditor({
         scrollToLine(line) {
             if (state.schemaMode === 'list') {
@@ -116,11 +154,11 @@ onBeforeUnmount(() => {
         <!-- 列表模式 -->
         <div v-show="state.schemaMode === 'list'" id="listMode" class="min-h-0 flex-1 overflow-hidden">
             <div ref="listWrapRef" class="h-full overflow-auto">
-                <DataTable :value="state.listRows" editMode="cell" v-model:editingRows="editingRows"
+                <DataTable ref="tableRef" :value="state.listRows" editMode="cell" v-model:editingRows="editingRows"
                     @cell-edit-complete="onCellEditComplete" resizableColumns columnResizeMode="fit" reorderableColumns
-                    stateStorage="local" stateKey="hexan.schemaCols.v3" size="small" scrollable scrollHeight="flex"
-                    stripedRows :tableStyle="{ width: '840px' }" :rowClass="rowCls" class="list-dt">
-                    <Column header="#" :style="{ width: '42px' }" :reorderableColumn="false" :resizeable="false">
+                    @column-reorder="applyFixedColumnOrder" stateStorage="local" stateKey="hexan.schemaCols.v4" size="small"
+                    scrollable scrollHeight="flex" stripedRows :tableStyle="{ width: '840px' }" :rowClass="rowCls" class="list-dt">
+                    <Column header="#" columnKey="idx" :style="{ width: '42px' }" :reorderableColumn="false" :resizeable="false">
                         <template #body="{ index }">{{ index + 1 }}</template>
                     </Column>
                     <Column field="name" header="名称" columnKey="name" :style="{ width: '150px' }">
